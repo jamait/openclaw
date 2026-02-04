@@ -16,6 +16,18 @@ const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
 
 /**
+ * Required headers for GitHub Copilot Enterprise accounts.
+ * Without these headers, Enterprise accounts receive HTTP 421 Misdirected Request.
+ * See: https://github.com/openclaw/openclaw/issues/1797
+ */
+const GITHUB_COPILOT_HEADERS: Record<string, string> = {
+  "User-Agent": "GitHubCopilotChat/0.35.0",
+  "Editor-Version": "vscode/1.107.0",
+  "Editor-Plugin-Version": "copilot-chat/0.35.0",
+  "Copilot-Integration-Id": "vscode-chat",
+};
+
+/**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
  *
@@ -247,6 +259,7 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 /**
+<<<<<<< HEAD
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
  * Z.AI's API supports the `tool_stream` parameter to enable real-time streaming
@@ -277,6 +290,22 @@ function createZaiToolStreamWrapper(
       },
     });
   };
+=======
+ * Create a streamFn wrapper that adds GitHub Copilot IDE headers.
+ * Required for Enterprise accounts to avoid HTTP 421 Misdirected Request.
+ * See: https://github.com/openclaw/openclaw/issues/1797
+ */
+function createGitHubCopilotHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      headers: {
+        ...GITHUB_COPILOT_HEADERS,
+        ...options?.headers,
+      },
+    });
+>>>>>>> 4b69e72f2 (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
 }
 
 /**
@@ -324,6 +353,7 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
   }
 
+<<<<<<< HEAD
   // Enable Z.AI tool_stream for real-time tool call streaming.
   // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
   if (provider === "zai" || provider === "z-ai") {
@@ -334,8 +364,17 @@ export function applyExtraParamsToAgent(
     }
   }
 
+=======
+<<<<<<< HEAD
+>>>>>>> 4b69e72f2 (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
   // server-side conversation state is preserved.
   agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+=======
+  if (provider === "github-copilot") {
+    log.debug(`applying GitHub Copilot IDE headers for ${provider}/${modelId}`);
+    agent.streamFn = createGitHubCopilotHeadersWrapper(agent.streamFn);
+  }
+>>>>>>> af2fa4d8d (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
 }

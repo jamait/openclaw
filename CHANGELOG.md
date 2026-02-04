@@ -862,6 +862,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+<<<<<<< HEAD
 - Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
 - Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed).
 - Onboarding: drop completion prompt now handled by install/update.
@@ -873,6 +874,12 @@ Docs: https://docs.openclaw.ai
 - fix(webchat): respect user scroll position during streaming and refresh (#7226) (thanks @marcomarandiz)
 - Telegram: recover from grammY long-poll timed out errors. (#7466) Thanks @macmimi23.
 - Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
+=======
+- Security: require operator.approvals for gateway /approve commands. (#1) Thanks @mitsuhiko, @yueyueL.
+- Updates: honor update.channel for update.run (Control UI) and channel-based npm tags for global installs.
+- GitHub Copilot: add required IDE headers to fix HTTP 421 Misdirected Request for Enterprise accounts. (#1797) Thanks @at10ti0n.
+- Security: Matrix allowlists now require full MXIDs; ambiguous name resolution no longer grants access. Thanks @MegaManSec.
+>>>>>>> 3f7d8d827 (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
 - Security: enforce access-group gating for Slack slash commands when channel type lookup fails.
 - Security: require validated shared-secret auth before skipping device identity on gateway connect. Thanks @simecek.
 - Security: guard skill installer downloads with SSRF checks (block private/localhost URLs).
