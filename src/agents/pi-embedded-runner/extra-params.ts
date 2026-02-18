@@ -259,7 +259,6 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 /**
-<<<<<<< HEAD
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
  * Z.AI's API supports the `tool_stream` parameter to enable real-time streaming
@@ -290,7 +289,9 @@ function createZaiToolStreamWrapper(
       },
     });
   };
-=======
+}
+
+/**
  * Create a streamFn wrapper that adds GitHub Copilot IDE headers.
  * Required for Enterprise accounts to avoid HTTP 421 Misdirected Request.
  * See: https://github.com/openclaw/openclaw/issues/1797
@@ -305,7 +306,6 @@ function createGitHubCopilotHeadersWrapper(baseStreamFn: StreamFn | undefined): 
         ...options?.headers,
       },
     });
->>>>>>> 4b69e72f2 (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
 }
 
 /**
@@ -353,7 +353,6 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
   }
 
-<<<<<<< HEAD
   // Enable Z.AI tool_stream for real-time tool call streaming.
   // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
   if (provider === "zai" || provider === "z-ai") {
@@ -364,17 +363,13 @@ export function applyExtraParamsToAgent(
     }
   }
 
-=======
-<<<<<<< HEAD
->>>>>>> 4b69e72f2 (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
-  // Work around upstream pi-ai hardcoding `store: false` for Responses API.
-  // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
-  // server-side conversation state is preserved.
-  agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
-=======
   if (provider === "github-copilot") {
     log.debug(`applying GitHub Copilot IDE headers for ${provider}/${modelId}`);
     agent.streamFn = createGitHubCopilotHeadersWrapper(agent.streamFn);
   }
->>>>>>> af2fa4d8d (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
+
+  // Work around upstream pi-ai hardcoding `store: false` for Responses API.
+  // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
+  // server-side conversation state is preserved.
+  agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
 }
