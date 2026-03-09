@@ -12,17 +12,25 @@ import {
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
-
-const OPENROUTER_APP_HEADERS: Record<string, string> = {
-  "HTTP-Referer": "https://openclaw.ai",
-  "X-Title": "OpenClaw",
-};
-const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
-// NOTE: We only force `store=true` for *direct* OpenAI Responses.
-// Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
-const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
+import {
+  createMoonshotThinkingWrapper,
+  createSiliconFlowThinkingWrapper,
+  resolveMoonshotThinkingType,
+  shouldApplySiliconFlowThinkingOffCompat,
+} from "./moonshot-stream-wrappers.js";
+import {
+  createCodexDefaultTransportWrapper,
+  createOpenAIDefaultTransportWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAIServiceTierWrapper,
+  resolveOpenAIServiceTier,
+} from "./openai-stream-wrappers.js";
+import {
+  createKilocodeWrapper,
+  createOpenRouterSystemCacheWrapper,
+  createOpenRouterWrapper,
+  isProxyReasoningUnsupported,
+} from "./proxy-stream-wrappers.js";
 
 /**
  * Required headers for GitHub Copilot Enterprise accounts.
@@ -240,94 +248,6 @@ function createGoogleThinkingPayloadWrapper(
   };
 }
 
-function isAnthropic1MModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-function parseHeaderList(value: unknown): string[] {
-  if (typeof value !== "string") {
-    return [];
-  }
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function resolveAnthropicBetas(
-  extraParams: Record<string, unknown> | undefined,
-  provider: string,
-  modelId: string,
-): string[] | undefined {
-  if (provider !== "anthropic") {
-    return undefined;
-  }
-
-  const betas = new Set<string>();
-  const configured = extraParams?.anthropicBeta;
-  if (typeof configured === "string" && configured.trim()) {
-    betas.add(configured.trim());
-  } else if (Array.isArray(configured)) {
-    for (const beta of configured) {
-      if (typeof beta === "string" && beta.trim()) {
-        betas.add(beta.trim());
-      }
-    }
-  }
-
-  if (extraParams?.context1m === true) {
-    if (isAnthropic1MModel(modelId)) {
-      betas.add(ANTHROPIC_CONTEXT_1M_BETA);
-    } else {
-      log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
-    }
-  }
-
-  return betas.size > 0 ? [...betas] : undefined;
-}
-
-function mergeAnthropicBetaHeader(
-  headers: Record<string, string> | undefined,
-  betas: string[],
-): Record<string, string> {
-  const merged = { ...headers };
-  const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "anthropic-beta");
-  const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
-  const values = Array.from(new Set([...existing, ...betas]));
-  const key = existingKey ?? "anthropic-beta";
-  merged[key] = values.join(",");
-  return merged;
-}
-
-function createAnthropicBetaHeadersWrapper(
-  baseStreamFn: StreamFn | undefined,
-  betas: string[],
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      headers: mergeAnthropicBetaHeader(options?.headers, betas),
-    });
-}
-
-/**
- * Create a streamFn wrapper that adds OpenRouter app attribution headers.
- * These headers allow OpenClaw to appear on OpenRouter's leaderboard.
- */
-function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      headers: {
-        ...OPENROUTER_APP_HEADERS,
-        ...options?.headers,
-      },
-    });
-}
-
 /**
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
@@ -355,27 +275,10 @@ function createZaiToolStreamWrapper(
           // Inject tool_stream: true for Z.AI API
           (payload as Record<string, unknown>).tool_stream = true;
         }
-        originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, payloadModel);
       },
     });
   };
-}
-
-/**
- * Create a streamFn wrapper that adds GitHub Copilot IDE headers.
- * Required for Enterprise accounts to avoid HTTP 421 Misdirected Request.
- * See: https://github.com/openclaw/openclaw/issues/1797
- */
-function createGitHubCopilotHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
-      ...options,
-      headers: {
-        ...GITHUB_COPILOT_HEADERS,
-        ...options?.headers,
-      },
-    });
 }
 
 function resolveAliasedParamValue(
@@ -423,7 +326,9 @@ function createParallelToolCallsWrapper(
       },
     });
   };
-=======
+}
+
+/**
  * Create a streamFn wrapper that adds GitHub Copilot IDE headers.
  * Required for Enterprise accounts to avoid HTTP 421 Misdirected Request.
  * See: https://github.com/openclaw/openclaw/issues/1797
@@ -438,7 +343,6 @@ function createGitHubCopilotHeadersWrapper(baseStreamFn: StreamFn | undefined): 
         ...options?.headers,
       },
     });
->>>>>>> 4b69e72f2 (fix(github-copilot): add IDE headers to fix HTTP 421 for Enterprise accounts)
 }
 
 /**
@@ -515,7 +419,36 @@ export function applyExtraParamsToAgent(
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
-    agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+    // "auto" is a dynamic routing model — we don't know which underlying model
+    // OpenRouter will select, and it may be a reasoning-required endpoint.
+    // Omit the thinkingLevel so we never inject `reasoning.effort: "none"`,
+    // which would cause a 400 on models where reasoning is mandatory.
+    // Users who need reasoning control should target a specific model ID.
+    // See: openclaw/openclaw#24851
+    //
+    // x-ai/grok models do not support OpenRouter's reasoning.effort parameter
+    // and reject payloads containing it with "Invalid arguments passed to the
+    // model." Skip reasoning injection for these models.
+    // See: openclaw/openclaw#32039
+    const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
+    const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
+    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  }
+
+  if (provider === "kilocode") {
+    log.debug(`applying Kilocode feature header for ${provider}/${modelId}`);
+    // kilo/auto is a dynamic routing model — skip reasoning injection
+    // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
+    // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
+    const kilocodeThinkingLevel =
+      modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
+    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+  }
+
+  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
+    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
+    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
@@ -533,8 +466,37 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createGitHubCopilotHeadersWrapper(agent.streamFn);
   }
 
+  // Guard Google payloads against invalid negative thinking budgets emitted by
+  // upstream model-ID heuristics for Gemini 3.1 variants.
+  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  const openAIServiceTier = resolveOpenAIServiceTier(merged);
+  if (openAIServiceTier) {
+    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
+
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
-  // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
-  // server-side conversation state is preserved.
-  agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+  // Force `store=true` for direct OpenAI Responses models and auto-enable
+  // server-side compaction for compatible OpenAI Responses payloads.
+  agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (rawParallelToolCalls !== undefined) {
+    if (typeof rawParallelToolCalls === "boolean") {
+      agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
+    } else if (rawParallelToolCalls === null) {
+      log.debug("parallel_tool_calls suppressed by null override, skipping injection");
+    } else {
+      const summary =
+        typeof rawParallelToolCalls === "string"
+          ? rawParallelToolCalls
+          : typeof rawParallelToolCalls;
+      log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+    }
+  }
 }
