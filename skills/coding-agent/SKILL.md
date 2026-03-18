@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.'
+description: 'Delegate coding tasks to OpenCode (preferred), Claude Code, Codex, or Pi agents via background process. OpenCode uses GitHub Copilot (free). Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required.'
 metadata:
   {
     "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
@@ -176,11 +176,65 @@ bash workdir:~/project background:true command:"claude --permission-mode bypassP
 
 ---
 
-## OpenCode
+## OpenCode (Preferred for Development)
+
+OpenCode is the primary coding agent — connected to GitHub Copilot (free via Copilot Pro subscription).
+Binary: `~/.opencode/bin/opencode` (also on PATH). Auth stored in `~/.local/share/opencode/auth.json`.
+
+**Provider:** GitHub Copilot (OAuth, zero cost). Also has Anthropic/OpenAI/Perplexity from environment.
+
+### One-shot tasks
 
 ```bash
-bash pty:true workdir:~/project command:"opencode run 'Your task'"
+# Quick task (non-interactive, outputs result)
+bash pty:true workdir:~/project command:"opencode run 'Refactor the auth module to use dependency injection'"
+
+# Background for longer work
+bash pty:true workdir:~/project background:true command:"opencode run 'Build a REST API for the scoring system. Create models, routes, and tests.'"
 ```
+
+### Interactive TUI
+
+```bash
+# Launch interactive session (for complex, multi-step work)
+bash pty:true workdir:~/project command:"opencode"
+# Then use send-keys/submit to interact
+```
+
+### Headless server mode
+
+```bash
+# Start headless (useful for remote orchestration)
+opencode serve
+# Attach from another terminal
+opencode attach <url>
+```
+
+### Key flags
+
+| Command                   | Description                         |
+| ------------------------- | ----------------------------------- |
+| `opencode run "prompt"`   | One-shot execution, exits when done |
+| `opencode`                | Interactive TUI                     |
+| `opencode serve`          | Headless server mode                |
+| `opencode attach <url>`   | Attach to running server            |
+| `opencode providers list` | Show configured providers           |
+
+### Provider selection
+
+**Always follow the tiered provider priority:**
+
+1. **GitHub Copilot** (free) — always first choice
+2. **OpenAI** (prepaid credits) — when Copilot unavailable
+3. **Anthropic** (paid API) — last resort only
+
+OpenCode may auto-select Anthropic if the key is in environment — **always specify Copilot explicitly:**
+
+```bash
+opencode run --model github-copilot/claude-sonnet-4.5 "Your task"
+```
+
+For Codex CLI, it uses OpenAI by default (priority 2) — this is fine since Codex only supports OpenAI.
 
 ---
 
@@ -260,6 +314,47 @@ When you spawn coding agents in the background, keep the user in the loop.
 - If you kill a session, immediately say you killed it and why.
 
 This prevents the user from seeing only "Agent failed before reply" and having no idea what happened.
+
+---
+
+## Trello Updates (Standard Practice)
+
+When spawning coding agents for tracked work, update Trello to reflect progress:
+
+**On start:**
+
+- Move the relevant Trello card to "In Progress"
+- Add a comment: what agent, what task, which provider
+
+**On milestone/completion:**
+
+- Add a comment with progress summary
+- On completion: move card to "Review" or "Done" as appropriate
+
+**On failure:**
+
+- Add a comment with error details and next steps
+
+**API pattern:**
+
+```bash
+# Move card to a list
+curl -s -X PUT "https://api.trello.com/1/cards/${CARD_ID}?idList=${LIST_ID}&key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN}"
+
+# Add comment
+curl -s -X POST "https://api.trello.com/1/cards/${CARD_ID}/actions/comments?key=${TRELLO_API_KEY}&token=${TRELLO_TOKEN}" \
+  --data-urlencode "text=🤖 Progress update..."
+```
+
+**Trello list IDs (Ops board):**
+
+- Backlog: `69b9194219ad91066f74c7c0`
+- To Do: `69b91942cc3835fa9deeae35`
+- In Progress: `69b91942b9d726298aa76432`
+- Review: `69b91943bdfe0c93a0fd3386`
+- Done: `69b9194327ceda2f8d07354f`
+
+Env vars available: `TRELLO_API_KEY`, `TRELLO_TOKEN`, `TRELLO_BOARD_ID`
 
 ---
 
