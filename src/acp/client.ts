@@ -13,17 +13,18 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
-} from "openclaw/plugin-sdk/windows-spawn";
-import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+} from "../plugin-sdk/windows-spawn.js";
 import {
   listKnownProviderAuthEnvVarNames,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
 const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
@@ -294,7 +295,7 @@ export async function resolvePermissionRequest(
   const prompt = deps.prompt ?? promptUserPermission;
   const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
-  const toolTitle = params.toolCall?.title ?? "tool";
+  const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
   const toolName = resolveToolNameForPermission(params);
   const toolKind = resolveToolKindForPermission(toolName);
 

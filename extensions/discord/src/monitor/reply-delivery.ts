@@ -2,12 +2,6 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
-import { createDiscordRetryRunner, type RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
-import {
-  resolveRetryConfig,
-  retryAsync,
-  type RetryConfig,
-} from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
@@ -15,10 +9,17 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveRetryConfig,
+  retryAsync,
+  type RetryConfig,
+  type RetryRunner,
+} from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { createDiscordRetryRunner } from "../retry.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { sendDiscordText } from "../send.shared.js";
 

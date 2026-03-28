@@ -3,7 +3,7 @@ import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "openclaw/plugin-sdk/provider-models";
+} from "../plugin-sdk/zai.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 
 export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";

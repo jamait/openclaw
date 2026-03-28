@@ -10,20 +10,16 @@ import {
 } from "@buape/carbon";
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import {
-  issuePairingChallenge,
-  upsertChannelPairingRequest,
-} from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  readStoreAllowFromForDmPolicy,
-  resolvePinnedMainDmOwnerFromAllowlist,
-} from "openclaw/plugin-sdk/security-runtime";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import {
   createDiscordFormModal,
@@ -34,6 +30,7 @@ import {
 } from "../components.js";
 import {
   type DiscordGuildEntryResolved,
+  isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordAllowListMatch,
@@ -141,6 +138,8 @@ export function buildAgentButtonCustomId(componentId: string): string {
 export function buildAgentSelectCustomId(componentId: string): string {
   return `${AGENT_SELECT_KEY}:componentId=${encodeURIComponent(componentId)}`;
 }
+
+const { resolvePinnedMainDmOwnerFromAllowlist } = securityRuntime;
 
 export function resolveAgentComponentRoute(params: {
   ctx: AgentComponentContext;
@@ -268,6 +267,7 @@ export async function ensureGuildComponentMemberAllowed(params: {
   componentLabel: string;
   unauthorizedReply: string;
   allowNameMatching: boolean;
+  groupPolicy: "open" | "disabled" | "allowlist";
 }) {
   const {
     interaction,
@@ -286,6 +286,15 @@ export async function ensureGuildComponentMemberAllowed(params: {
     return true;
   }
 
+  async function replyUnauthorized() {
+    try {
+      await interaction.reply({
+        content: unauthorizedReply,
+        ...replyOpts,
+      });
+    } catch {}
+  }
+
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
     channelId,
@@ -296,6 +305,29 @@ export async function ensureGuildComponentMemberAllowed(params: {
     parentSlug: channelCtx.parentSlug,
     scope: channelCtx.isThread ? "thread" : "channel",
   });
+
+  if (channelConfig?.enabled === false) {
+    await replyUnauthorized();
+    return false;
+  }
+  const channelAllowlistConfigured =
+    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+  const channelAllowed = channelConfig?.allowed !== false;
+  if (
+    !isDiscordGroupAllowedByPolicy({
+      groupPolicy: params.groupPolicy,
+      guildAllowlisted: Boolean(guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed,
+    })
+  ) {
+    await replyUnauthorized();
+    return false;
+  }
+  if (channelConfig?.allowed === false) {
+    await replyUnauthorized();
+    return false;
+  }
 
   const { memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
@@ -313,12 +345,7 @@ export async function ensureGuildComponentMemberAllowed(params: {
   }
 
   logVerbose(`agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`);
-  try {
-    await interaction.reply({
-      content: unauthorizedReply,
-      ...replyOpts,
-    });
-  } catch {}
+  await replyUnauthorized();
   return false;
 }
 
@@ -393,6 +420,11 @@ export async function ensureAgentComponentInteractionAllowed(params: {
     componentLabel: params.componentLabel,
     unauthorizedReply: params.unauthorizedReply,
     allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
+    groupPolicy: resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: params.ctx.cfg.channels?.discord !== undefined,
+      groupPolicy: params.ctx.discordConfig?.groupPolicy,
+      defaultGroupPolicy: params.ctx.cfg.channels?.defaults?.groupPolicy,
+    }).groupPolicy,
   });
   if (!memberAllowed) {
     return null;
@@ -431,6 +463,21 @@ async function ensureDmComponentAuthorized(params: {
   replyOpts: { ephemeral?: boolean };
 }) {
   const { ctx, interaction, user, componentLabel, replyOpts } = params;
+  const allowFromPrefixes = ["discord:", "user:", "pk:"];
+  const resolveAllowMatch = (entries: string[]) => {
+    const allowList = normalizeDiscordAllowList(entries, allowFromPrefixes);
+    return allowList
+      ? resolveDiscordAllowListMatch({
+          allowList,
+          candidate: {
+            id: user.id,
+            name: user.username,
+            tag: formatDiscordUserTag(user),
+          },
+          allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
+        })
+      : { allowed: false };
+  };
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
@@ -446,44 +493,48 @@ async function ensureDmComponentAuthorized(params: {
     return true;
   }
 
-  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+  if (dmPolicy === "allowlist") {
+    const allowMatch = resolveAllowMatch(ctx.allowFrom ?? []);
+    if (allowMatch.allowed) {
+      return true;
+    }
+    logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
+    try {
+      await interaction.reply({
+        content: `You are not authorized to use this ${componentLabel}.`,
+        ...replyOpts,
+      });
+    } catch {}
+    return false;
+  }
+
+  const storeAllowFrom = await securityRuntime.readStoreAllowFromForDmPolicy({
     provider: "discord",
     accountId: ctx.accountId,
     dmPolicy,
   });
-  const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
-  const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
-  const allowMatch = allowList
-    ? resolveDiscordAllowListMatch({
-        allowList,
-        candidate: {
-          id: user.id,
-          name: user.username,
-          tag: formatDiscordUserTag(user),
-        },
-        allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
-      })
-    : { allowed: false };
+  const allowMatch = resolveAllowMatch([...(ctx.allowFrom ?? []), ...storeAllowFrom]);
   if (allowMatch.allowed) {
     return true;
   }
 
   if (dmPolicy === "pairing") {
-    const pairingResult = await issuePairingChallenge({
+    const pairingResult = await createChannelPairingChallengeIssuer({
       channel: "discord",
+      upsertPairingRequest: async ({ id, meta }) =>
+        await conversationRuntime.upsertChannelPairingRequest({
+          channel: "discord",
+          id,
+          accountId: ctx.accountId,
+          meta,
+        }),
+    })({
       senderId: user.id,
       senderIdLine: `Your Discord user id: ${user.id}`,
       meta: {
         tag: formatDiscordUserTag(user),
         name: user.username,
       },
-      upsertPairingRequest: async ({ id, meta }) =>
-        await upsertChannelPairingRequest({
-          channel: "discord",
-          id,
-          accountId: ctx.accountId,
-          meta,
-        }),
       sendPairingReply: async (text) => {
         await interaction.reply({
           content: text,

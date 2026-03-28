@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
@@ -11,9 +10,10 @@ import {
 } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime } from "../media/mime.js";
+import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
-import { fetchWithTimeout } from "./providers/shared.js";
+import { fetchWithTimeout } from "./shared.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {
@@ -39,10 +39,15 @@ type AttachmentCacheEntry = {
   tempCleanup?: () => Promise<void>;
 };
 
-const DEFAULT_LOCAL_PATH_ROOTS = mergeInboundPathRoots(
-  getDefaultMediaLocalRoots(),
-  DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-);
+let defaultLocalPathRoots: readonly string[] | undefined;
+
+function getDefaultLocalPathRoots(): readonly string[] {
+  defaultLocalPathRoots ??= mergeInboundPathRoots(
+    getDefaultMediaLocalRoots(),
+    DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
+  );
+  return defaultLocalPathRoots;
+}
 
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
@@ -66,7 +71,10 @@ export class MediaAttachmentCache {
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
     this.attachments = attachments;
-    this.localPathRoots = mergeInboundPathRoots(options?.localPathRoots, DEFAULT_LOCAL_PATH_ROOTS);
+    this.localPathRoots = mergeInboundPathRoots(
+      options?.localPathRoots,
+      getDefaultLocalPathRoots(),
+    );
     for (const attachment of attachments) {
       this.entries.set(attachment.index, { attachment });
     }

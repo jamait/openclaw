@@ -9,9 +9,8 @@ import {
   buildAgentMediaPayload,
   buildModelsProviderData,
   DM_GROUP_ACCESS_REASON,
-  createScopedPairingAccess,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
+  createChannelPairingController,
+  createChannelReplyPipeline,
   logInboundDrop,
   logTypingFailure,
   buildPendingHistoryContextFromMap,
@@ -176,7 +175,7 @@ export function resolveMattermostEffectiveReplyToId(params: {
   threadRootId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
-  if (threadRootId) {
+  if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
   if (params.kind === "direct") {
@@ -213,6 +212,13 @@ export function resolveMattermostThreadSessionContext(params: {
     parentSessionKey: threadKeys.parentSessionKey,
   };
 }
+
+export function resolveMattermostReactionChannelId(
+  payload: Pick<MattermostEventPayload, "broadcast" | "data">,
+): string | undefined {
+  return payload.broadcast?.channel_id?.trim() || payload.data?.channel_id?.trim() || undefined;
+}
+
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
   if (mediaList.length === 0) {
     return "";
@@ -245,7 +251,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg,
     accountId: opts.accountId,
   });
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "mattermost",
     accountId: account.accountId,
@@ -264,7 +270,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     );
   }
 
-  const client = createMattermostClient({ baseUrl, botToken });
+  const client = createMattermostClient({
+    baseUrl,
+    botToken,
+    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+  });
   const botUser = await fetchMattermostMe(client);
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
@@ -362,7 +372,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           response: {
             update: {
               message: post.message ?? "",
-              props: post.props as Record<string, unknown> | undefined,
+              props: post.props ?? undefined,
             },
             ephemeral_text: `OpenClaw ignored this action for ${decision.roomLabel}.`,
           },
@@ -462,26 +472,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
         });
-        const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
           cfg,
           agentId: route.agentId,
           channel: "mattermost",
           accountId: account.accountId,
-        });
-        const typingCallbacks = createTypingCallbacks({
-          start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
-          onStartError: (err) => {
-            logTypingFailure({
-              log: (message) => logger.debug?.(message),
-              channel: "mattermost",
-              target: opts.channelId,
-              error: err,
-            });
+          typing: {
+            start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
+            onStartError: (err) => {
+              logTypingFailure({
+                log: (message) => logger.debug?.(message),
+                channel: "mattermost",
+                target: opts.channelId,
+                error: err,
+              });
+            },
           },
         });
         const { dispatcher, replyOptions, markDispatchIdle } =
           core.channel.reply.createReplyDispatcherWithTyping({
-            ...prefixOptions,
+            ...replyPipeline,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {
               await deliverMattermostReplyPayload({
@@ -504,7 +514,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             onError: (err, info) => {
               runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
             },
-            onReplyStart: typingCallbacks.onReplyStart,
+            onReplyStart: typingCallbacks?.onReplyStart,
           });
 
         await core.channel.reply.dispatchReplyFromConfig({
@@ -653,30 +663,30 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         fallbackLimit: account.textChunkLimit ?? 4000,
       },
     );
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const shouldDeliverReplies = params.deliverReplies === true;
+    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
       cfg,
       agentId: params.route.agentId,
       channel: "mattermost",
       accountId: account.accountId,
+      typing: shouldDeliverReplies
+        ? {
+            start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
+            onStartError: (err) => {
+              logTypingFailure({
+                log: (message) => logger.debug?.(message),
+                channel: "mattermost",
+                target: params.channelId,
+                error: err,
+              });
+            },
+          }
+        : undefined,
     });
-    const shouldDeliverReplies = params.deliverReplies === true;
     const capturedTexts: string[] = [];
-    const typingCallbacks = shouldDeliverReplies
-      ? createTypingCallbacks({
-          start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
-          onStartError: (err) => {
-            logTypingFailure({
-              log: (message) => logger.debug?.(message),
-              channel: "mattermost",
-              target: params.channelId,
-              error: err,
-            });
-          },
-        })
-      : undefined;
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        ...prefixOptions,
+        ...replyPipeline,
         // Picker-triggered confirmations should stay immediate.
         deliver: async (payload: ReplyPayload) => {
           const trimmedPayload = {
@@ -1087,7 +1097,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   idLine: `Your Mattermost user id: ${senderId}`,
                   code,
                 }),
-                { accountId: account.accountId },
+                { cfg, accountId: account.accountId },
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
@@ -1379,27 +1389,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
     });
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
       cfg,
       agentId: route.agentId,
       channel: "mattermost",
       accountId: account.accountId,
-    });
-
-    const typingCallbacks = createTypingCallbacks({
-      start: () => sendTypingIndicator(channelId, effectiveReplyToId),
-      onStartError: (err) => {
-        logTypingFailure({
-          log: (message) => logger.debug?.(message),
-          channel: "mattermost",
-          target: channelId,
-          error: err,
-        });
+      typing: {
+        start: () => sendTypingIndicator(channelId, effectiveReplyToId),
+        onStartError: (err) => {
+          logTypingFailure({
+            log: (message) => logger.debug?.(message),
+            channel: "mattermost",
+            target: channelId,
+            error: err,
+          });
+        },
       },
     });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        ...prefixOptions,
+        ...replyPipeline,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
         deliver: async (payload: ReplyPayload) => {
@@ -1490,7 +1499,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const senderName = senderInfo?.username?.trim() || userId;
 
     // Resolve the channel from broadcast or post to route to the correct agent session
-    const channelId = payload.broadcast?.channel_id;
+    const channelId = resolveMattermostReactionChannelId(payload);
     if (!channelId) {
       // Without a channel id we cannot verify DM/group policies — drop to be safe
       logVerboseMessage(

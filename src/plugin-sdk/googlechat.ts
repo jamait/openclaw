@@ -1,11 +1,8 @@
-// Narrow plugin-sdk surface for the bundled googlechat plugin.
+// Private helper surface for the bundled googlechat plugin.
 // Keep this list additive and scoped to symbols used under extensions/googlechat.
 
 import { resolveChannelGroupRequireMention } from "./channel-policy.js";
-import {
-  createOptionalChannelSetupAdapter,
-  createOptionalChannelSetupWizard,
-} from "./optional-channel-setup.js";
+import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
 export {
   createActionGate,
@@ -27,7 +24,10 @@ export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { fetchRemoteMedia } from "../media/fetch.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { loadWebMedia } from "./web-media.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
@@ -49,7 +49,7 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { getChatChannelMeta } from "../channels/registry.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export {
@@ -71,26 +71,23 @@ export { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
-export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export {
   evaluateGroupRouteAccessForPolicy,
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
 export { extractToolSend } from "./tool-send.js";
-export { resolveWebhookPath } from "./webhook-path.js";
-export type { WebhookInFlightLimiter } from "./webhook-request-guards.js";
 export {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
-} from "./webhook-request-guards.js";
-export {
   registerWebhookTargetWithPluginRoute,
-  resolveWebhookTargets,
+  resolveWebhookPath,
   resolveWebhookTargetWithAuthOrReject,
+  resolveWebhookTargets,
+  type WebhookInFlightLimiter,
   withResolvedWebhookRequestPipeline,
-} from "./webhook-targets.js";
+} from "./webhook-ingress.js";
 
 type GoogleChatGroupContext = {
   cfg: import("../config/config.js").OpenClawConfig;
@@ -107,16 +104,12 @@ export function resolveGoogleChatGroupRequireMention(params: GoogleChatGroupCont
   });
 }
 
-export const googlechatSetupAdapter = createOptionalChannelSetupAdapter({
+const googlechatSetup = createOptionalChannelSetupSurface({
   channel: "googlechat",
   label: "Google Chat",
   npmSpec: "@openclaw/googlechat",
   docsPath: "/channels/googlechat",
 });
 
-export const googlechatSetupWizard = createOptionalChannelSetupWizard({
-  channel: "googlechat",
-  label: "Google Chat",
-  npmSpec: "@openclaw/googlechat",
-  docsPath: "/channels/googlechat",
-});
+export const googlechatSetupAdapter = googlechatSetup.setupAdapter;
+export const googlechatSetupWizard = googlechatSetup.setupWizard;
